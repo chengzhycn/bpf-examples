@@ -33,7 +33,8 @@ int main(int argc, char **argv)
     /* load bpf object */
     if (bpf_object__load(obj))
     {
-        fprintf(stderr, "error load bpf object file\n");
+        fprintf(stderr, "error load bpf object file: %s\n", strerror(errno));
+        ret = -1;
         goto cleanup;
     }
 
@@ -45,6 +46,7 @@ int main(int argc, char **argv)
     if (libbpf_get_error(prog))
     {
         fprintf(stderr, "error find " SEC_NAME " prog in obj file\n");
+        ret = -1;
         goto cleanup;
     }
 
@@ -79,6 +81,7 @@ int main(int argc, char **argv)
     ret = bpf_tc_attach(&hook, &opts);
     if (ret == -EEXIST)
     {
+        fprintf(stderr, "enter replace logic\n");
         // use BPF_TC_F_REPLACE to replace it.
         opts.flags = BPF_TC_F_REPLACE;
         opts.prog_fd = fd;
@@ -87,7 +90,7 @@ int main(int argc, char **argv)
 
     if (ret < 0)
     {
-        fprintf(stderr, "error attach bpf program to tc hook\n");
+        fprintf(stderr, "error attach program to tc hook: %s\n", strerror(errno));
         goto cleanup2;
     }
 
@@ -95,6 +98,7 @@ int main(int argc, char **argv)
 
     // handle and priority must be set, use the auto allocated handle
     // and priority.
+    /* tc filter get dev eth0 egress proto all handle 0x2 pref 49152 bpf */
     DECLARE_LIBBPF_OPTS(bpf_tc_opts, info_opts,
                         .handle = opts.handle, .priority = opts.priority);
     ret = bpf_tc_query(&hook, &info_opts);
@@ -105,6 +109,21 @@ int main(int argc, char **argv)
     }
 
     fprintf(stdout, "find object prog id: %u\n", info_opts.prog_id);
+
+    // handle and priority must be specified, otherwise tc will create a new filter instead of
+    // replacing the old one.
+    /* tc filter replace dev eth0 egress handle 0x2 pref 49152 bpf da obj tc_hook_user_kern.o sec classifier */
+    DECLARE_LIBBPF_OPTS(bpf_tc_opts, rep_opts,
+                        .flags = BPF_TC_F_REPLACE,
+                        .handle = opts.handle,
+                        .priority = opts.priority,
+                        .prog_fd = fd);
+    ret = bpf_tc_attach(&hook, &rep_opts);
+    if (ret < 0)
+    {
+        fprintf(stderr, "error replace program to tc hook: %s\n", strerror(errno));
+        goto cleanup2;
+    }
 
     // pause here so that you can test it by `ping 10.10.10.10` and watch
     // the debug output by `sudo cat /sys/kernel/debug/tracing/trace_pipe`
